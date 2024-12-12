@@ -1,0 +1,196 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <link rel="stylesheet" href="styles.css">
+    <title>Guía de Instalación: Moodle con Apache, PostgreSQL, Nginx y Samba</title>
+</head>
+<body>
+    <header>
+        <h1>Guía de Instalación: Moodle 4.0 con Apache, PostgreSQL, Nginx y Samba</h1>
+    </header>
+
+    <main>
+        <!-- Sección para la máquina 1: Apache, Moodle y PostgreSQL -->
+        <section>
+            <h2>Máquina 1: Apache, Moodle y PostgreSQL</h2>
+
+            <!-- Instalación de paquetes -->
+            <h3>1. Instalación de Paquetes</h3>
+            <pre><code>sudo apt update
+sudo apt install apache2 php7.3 php7.3-fpm php7.3-cli php7.3-pgsql postgresql -y</code></pre>
+
+            <!-- Configuración de PostgreSQL -->
+            <h3>2. Configuración de PostgreSQL</h3>
+            <pre><code>sudo -u postgres psql
+CREATE DATABASE moodle;
+CREATE USER moodleuser WITH PASSWORD 'tu_contraseña_segura';
+GRANT ALL PRIVILEGES ON DATABASE moodle TO moodleuser;
+\q</code></pre>
+            <p>Editar el archivo <code>pg_hba.conf</code>:</p>
+            <pre><code>sudo nano /etc/postgresql/12/main/pg_hba.conf</code>
+Añade:
+<code>host    moodle    moodleuser    192.168.133.129/32    md5</code></pre>
+            <p>Reinicia PostgreSQL:</p>
+            <pre><code>sudo systemctl restart postgresql</code></pre>
+
+            <!-- Instalación de Moodle -->
+            <h3>3. Instalación de Moodle</h3>
+            <pre><code>sudo mkdir -p /var/www/moodle
+sudo wget https://download.moodle.org/stable40/moodle-latest-40.tgz -P /tmp
+sudo tar -xvzf /tmp/moodle-latest-40.tgz -C /var/www/</code></pre>
+
+            <!-- Opción 2: Usar el repositorio Git -->
+            <div class="step">
+                <h4>Opción 2: Usar el repositorio Git</h4>
+                <pre><code>sudo apt install git -y
+cd /var/www
+sudo git clone -b MOODLE_400_STABLE git://git.moodle.org/moodle.git moodle</code></pre>
+                <p>Configura los permisos:</p>
+                <pre><code>sudo mkdir -p /var/www/moodledata
+sudo chown -R www-data:www-data /var/www/moodle /var/www/moodledata
+sudo chmod -R 775 /var/www/moodle /var/www/moodledata</code></pre>
+                <p>Crea el archivo de configuración:</p>
+                <pre><code>sudo nano /var/www/moodle/config.php</code>
+Configura:
+<code>
+$CFG->dbtype = 'pgsql';
+$CFG->dblibrary = 'native';
+$CFG->dbhost = '192.168.133.128';
+$CFG->dbname = 'moodle';
+$CFG->dbuser = 'moodleuser';
+$CFG->dbpass = 'tu_contraseña_segura';
+$CFG->wwwroot = 'http://192.168.133.128';
+$CFG->dataroot = '/var/www/moodledata';
+</code></pre>
+            </div>
+
+            <!-- Configuración de Apache -->
+            <h3>4. Configuración de Apache</h3>
+            <pre><code>sudo nano /etc/apache2/sites-available/moodle.conf</code>
+Contenido:
+<code>
+<VirtualHost *:80>
+    DocumentRoot /var/www/moodle
+    ServerName 192.168.133.128
+    <Directory /var/www/moodle>
+        AllowOverride All
+        Require all granted
+    </Directory>
+</VirtualHost>
+</code></pre>
+            <p>Activa el sitio y reinicia Apache:</p>
+            <pre><code>sudo a2ensite moodle.conf
+sudo systemctl restart apache2</code></pre>
+        </section>
+
+        <!-- Configuración de Proxy Inverso en Apache -->
+        <div class="step">
+            <h3>6. Configurar Proxy Inverso en Apache</h3>
+            <pre><code>
+sudo nano /etc/apache2/sites-available/000-default.conf
+            </code></pre>
+            <p>Agregar las siguientes líneas dentro de la configuración del VirtualHost:</p>
+            <pre><code>
+RemoteIPHeader X-Forwarded-For
+SetEnvIf X-Forwarded-Proto https HTTPS=on
+            </code></pre>
+            <p>Habilitar módulos necesarios y reiniciar Apache:</p>
+            <pre><code>
+sudo a2enmod remoteip proxy proxy_http
+sudo systemctl restart apache2
+            </code></pre>
+        </div>
+
+        <!-- Sección para la máquina 2: Nginx y Samba -->
+        <section>
+            <h2>Máquina 2: Nginx y Samba</h2>
+            
+            <!-- Instalación de Nginx y Samba -->
+            <h3>1. Instalación de Nginx y Samba</h3>
+            <pre><code>sudo apt update
+sudo apt install nginx samba samba-common -y</code></pre>
+
+            <!-- Configuración de Samba -->
+            <h3>2. Configuración de Samba</h3>
+            <p>Editar el archivo:</p>
+            <pre><code>sudo nano /etc/samba/smb.conf</code>
+Añade:
+<code>
+[moodle]
+path = /var/www/moodle
+browsable = yes
+writable = yes
+guest ok = yes
+read only = no
+create mask = 0777
+directory mask = 0777
+force user = www-data
+</code></pre>
+            <p>Reinicia Samba:</p>
+            <pre><code>sudo systemctl restart smbd
+sudo systemctl enable smbd</code></pre>
+
+            <!-- Configuración de Nginx -->
+            <h3>3. Configuración de Nginx</h3>
+            <p>Crea un archivo de configuración:</p>
+            <pre><code>sudo nano /etc/nginx/sites-available/moodle</code>
+Contenido:
+<code>
+server {
+    listen 80;
+    server_name 192.168.133.129;
+    root /var/www/moodle;
+    index index.php;
+    location / {
+        try_files $uri $uri/ /index.php?$query_string;
+    }
+    location ~ \.php$ {
+        fastcgi_pass unix:/run/php/php7.3-fpm.sock;
+        include fastcgi_params;
+    }
+}
+</code></pre>
+
+            <!-- Configuración de Proxy Inverso con Nginx -->
+            <h1>Configuración de Proxy Inverso con Nginx</h1>
+            <h2>2. Configurar Nginx como Proxy Inverso</h2>
+            <p>Abre o crea el archivo de configuración del sitio para Moodle en Nginx:</p>
+            <pre><code>sudo nano /etc/nginx/sites-available/moodle</code></pre>
+            <p>Agrega lo siguiente para configurar el proxy inverso:</p>
+            <pre><code>server {
+listen 80;
+server_name ejemplo.com;
+location / {
+    proxy_pass http://127.0.0.1:8000;
+    proxy_set_header Host $host;
+    proxy_set_header X-Real-IP $remote_addr;
+    proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+    proxy_set_header X-Forwarded-Proto $scheme;
+    proxy_redirect off;
+}
+}</code></pre>
+
+            <!-- Habilitar la configuración del sitio en Nginx -->
+            <h2>3. Habilitar la Configuración del Sitio</h2>
+            <pre><code>sudo ln -s /etc/nginx/sites-available/moodle /etc/nginx/sites-enabled/</code></pre>
+
+            <!-- Probar y reiniciar Nginx -->
+            <h2>4. Probar la Configuración de Nginx</h2>
+            <pre><code>sudo nginx -t</code></pre>
+            <p>Si la configuración es correcta, reinicia Nginx:</p>
+            <pre><code>sudo systemctl restart nginx</code></pre>
+        </section>
+
+        <!-- Sección de pruebas finales -->
+        <section>
+            <h2>Pruebas Finales</h2>
+            <h3>1. Verifica Moodle en Apache</h3>
+            <pre><code>http://192.168.133.128</code></pre>
+            <h3>2. Verifica Samba desde Nginx</h3>
+            <pre><code>smbclient //192.168.133.129/moodle -U guest</code></pre>
+        </section>
+    </main>
+</body>
+</html>
